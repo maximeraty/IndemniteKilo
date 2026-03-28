@@ -5,6 +5,9 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  Switch,
+  View,
+  Text,
 } from 'react-native';
 import { useTheme } from '../theme/ThemeContext';
 import { useVehiculeStore } from '../stores/useVehiculeStore';
@@ -25,39 +28,30 @@ export function AjoutVehiculeScreen({
     : null;
 
   const [nom, setNom] = useState(existing?.nom ?? '');
-  const [immatriculation, setImmatriculation] = useState(
-    existing?.immatriculation ?? ''
-  );
-  const [tarifStr, setTarifStr] = useState(
-    existing ? existing.tarif_km.toString() : ''
-  );
   const [puissanceStr, setPuissanceStr] = useState(
     existing ? existing.puissance_fiscale.toString() : ''
   );
+  const [isElectrique, setIsElectrique] = useState(
+    existing?.is_electrique ?? false
+  );
   const [isSaving, setIsSaving] = useState(false);
-
-  const tarif = useMemo(() => {
-    const val = parseFloat(tarifStr.replace(',', '.'));
-    return isNaN(val) ? null : val;
-  }, [tarifStr]);
 
   const puissance = useMemo(() => {
     const val = parseInt(puissanceStr, 10);
     return isNaN(val) ? null : val;
   }, [puissanceStr]);
 
-  const isValid =
-    nom.trim().length > 0 && tarif !== null && tarif > 0;
+  const isValid = nom.trim().length > 0 && puissance !== null && puissance > 0;
 
   const handleSave = useCallback(async () => {
-    if (!isValid || tarif === null) return;
+    if (!isValid || puissance === null) return;
     setIsSaving(true);
     try {
       const data = {
         nom: nom.trim(),
-        immatriculation: immatriculation.trim(),
-        tarif_km: tarif,
-        puissance_fiscale: puissance ?? 0,
+        immatriculation: '',
+        puissance_fiscale: puissance,
+        is_electrique: isElectrique,
       };
 
       if (editingId) {
@@ -72,7 +66,7 @@ export function AjoutVehiculeScreen({
       setIsSaving(false);
     }
   }, [
-    isValid, tarif, puissance, nom, immatriculation,
+    isValid, puissance, nom, isElectrique,
     editingId, addVehicule, editVehicule, navigation,
   ]);
 
@@ -94,28 +88,34 @@ export function AjoutVehiculeScreen({
         />
 
         <Input
-          label="Immatriculation (optionnel)"
-          value={immatriculation}
-          onChangeText={setImmatriculation}
-          placeholder="Ex: AB-123-CD"
-          autoCapitalize="characters"
-        />
-
-        <Input
-          label="Tarif (EUR/km)"
-          value={tarifStr}
-          onChangeText={setTarifStr}
-          placeholder="Ex: 0,603"
-          keyboardType="decimal-pad"
-        />
-
-        <Input
-          label="Puissance fiscale (CV, optionnel)"
+          label="Chevaux fiscaux"
           value={puissanceStr}
           onChangeText={setPuissanceStr}
           placeholder="Ex: 5"
           keyboardType="number-pad"
         />
+
+        <View
+          style={[
+            styles.switchCard,
+            { backgroundColor: colors.surfaceSecondary },
+          ]}
+        >
+          <View style={styles.switchTextBlock}>
+            <Text style={[styles.switchTitle, { color: colors.text }]}>
+              Véhicule électrique
+            </Text>
+            <Text style={[styles.switchHint, { color: colors.textSecondary }]}>
+              Majoration automatique de 20 % du barème URSSAF
+            </Text>
+          </View>
+          <Switch
+            value={isElectrique}
+            onValueChange={setIsElectrique}
+            trackColor={{ true: '#0070EB', false: '#E2E2E7' }}
+            thumbColor="#FFFFFF"
+          />
+        </View>
 
         <Button
           title={editingId ? 'Modifier' : 'Ajouter'}
@@ -136,5 +136,28 @@ const styles = StyleSheet.create({
   content: {
     padding: 24,
     paddingBottom: 40,
+  },
+  switchCard: {
+    marginTop: 20,
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    minHeight: 72,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 16,
+  },
+  switchTextBlock: {
+    flex: 1,
+    gap: 4,
+  },
+  switchTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  switchHint: {
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

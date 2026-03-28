@@ -18,13 +18,21 @@ import { useTheme } from '../theme/ThemeContext';
 import { useTrajetStore } from '../stores/useTrajetStore';
 import { useVehiculeStore } from '../stores/useVehiculeStore';
 import { AddressSearchModal } from '../components/trajets/AddressSearchModal';
-import { calculerMontant } from '../services/distanceService';
 import {
   calculateRoute,
   formatShortAddress,
   type GeocodingResult,
 } from '../services/geocodingService';
-import { formatEuros, formatKm, formatDateFr } from '../utils/formatting';
+import {
+  getTrajetBaremePreview,
+  getVehiculeDescription,
+} from '../services/indemniteService';
+import {
+  formatEuros,
+  formatKm,
+  formatDateFr,
+  formatTarifKm,
+} from '../utils/formatting';
 import { getCurrentISODate } from '../utils/dateUtils';
 import type { AjoutTrajetScreenProps } from '../types/navigation';
 
@@ -316,9 +324,16 @@ export function AjoutTrajetScreen({ navigation, route }: AjoutTrajetScreenProps)
   );
   const [isSaving, setIsSaving] = useState(false);
   const [isCalculating, setIsCalculating] = useState(false);
+  const [isCalculatingBareme, setIsCalculatingBareme] = useState(false);
   const [showVehiculePicker, setShowVehiculePicker] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [addressModalTarget, setAddressModalTarget] = useState<'depart' | 'arrivee' | null>(null);
+  const [baremePreview, setBaremePreview] = useState<{
+    montant: number;
+    tarifKm: number;
+    distanceAvantKm: number;
+    distanceEffectiveKm: number;
+  } | null>(null);
 
   // Auto-calculate distance when both coordinates are set
   useEffect(() => {
@@ -352,10 +367,51 @@ export function AjoutTrajetScreen({ navigation, route }: AjoutTrajetScreenProps)
     [vehicules, vehiculeId]
   );
 
-  const montant = useMemo(() => {
-    if (distance === null || !selectedVehicule) return null;
-    return calculerMontant(distance, selectedVehicule.tarif_km, allerRetour);
-  }, [distance, selectedVehicule, allerRetour]);
+  useEffect(() => {
+    let cancelled = false;
+
+    if (
+      distance === null ||
+      distance <= 0 ||
+      vehiculeId === null ||
+      !selectedVehicule
+    ) {
+      setBaremePreview(null);
+      setIsCalculatingBareme(false);
+      return;
+    }
+
+    setIsCalculatingBareme(true);
+
+    getTrajetBaremePreview({
+      trajetId: editingId,
+      vehiculeId,
+      date,
+      distanceKm: distance,
+      allerRetour,
+    })
+      .then((preview) => {
+        if (!cancelled) {
+          setBaremePreview(preview);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setBaremePreview(null);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setIsCalculatingBareme(false);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [distance, vehiculeId, selectedVehicule, editingId, date, allerRetour]);
+
+  const montant = baremePreview?.montant ?? null;
 
   const isValid =
     adresseDepart.trim().length > 0 &&
@@ -379,9 +435,9 @@ export function AjoutTrajetScreen({ navigation, route }: AjoutTrajetScreenProps)
       };
 
       if (editingId) {
-        await editTrajet(editingId, formData, selectedVehicule!.tarif_km);
+        await editTrajet(editingId, formData);
       } else {
-        await addTrajet(formData, selectedVehicule!.tarif_km);
+        await addTrajet(formData);
       }
       navigation.goBack();
     } catch {
@@ -391,7 +447,7 @@ export function AjoutTrajetScreen({ navigation, route }: AjoutTrajetScreenProps)
     }
   }, [
     isValid, montant, vehiculeId, distance, date, adresseDepart,
-    adresseArrivee, allerRetour, motif, editingId, selectedVehicule,
+    adresseArrivee, allerRetour, motif, editingId,
     addTrajet, editTrajet, navigation,
   ]);
 
@@ -591,7 +647,7 @@ export function AjoutTrajetScreen({ navigation, route }: AjoutTrajetScreenProps)
                 >
                   <Text style={[styles.pickerItemText, { color: colors.text }]}>{v.nom}</Text>
                   <Text style={{ color: colors.textMuted, fontSize: 12, fontWeight: '500' }}>
-                    {formatEuros(v.tarif_km)}/km
+                    {getVehiculeDescription(v)}
                   </Text>
                 </TouchableOpacity>
               ))}
@@ -614,25 +670,40 @@ export function AjoutTrajetScreen({ navigation, route }: AjoutTrajetScreenProps)
         </View>
 
         {/* Summary card */}
-        {montant !== null && (
+        {(montant !== null || isCalculatingBareme) && (
           <View style={[styles.summaryCard, { backgroundColor: '#0058BC' }]}>
             <View style={styles.summaryRow}>
               <Text style={styles.summaryLabel}>Distance</Text>
               <Text style={styles.summaryValue}>
-                {formatKm(allerRetour && distance !== null ? distance * 2 : (distance ?? 0))}
+                {baremePreview
+                  ? formatKm(baremePreview.distanceEffectiveKm)
+                  : formatKm(allerRetour && distance !== null ? distance * 2 : (distance ?? 0))}
               </Text>
             </View>
             <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
             <View style={styles.summaryRow}>
-              <Text style={styles.summaryLabel}>Tarif</Text>
+              <Text style={styles.summaryLabel}>Tarif estimé</Text>
               <Text style={styles.summaryValue}>
-                {selectedVehicule ? `${formatEuros(selectedVehicule.tarif_km)}/km` : '-'}
+                {isCalculatingBareme ? 'Calcul...' : baremePreview ? `${formatTarifKm(baremePreview.tarifKm)}/km` : '-'}
+              </Text>
+            </View>
+            <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Cumul annuel avant</Text>
+              <Text style={styles.summaryValue}>
+                {baremePreview ? formatKm(baremePreview.distanceAvantKm) : '-'}
               </Text>
             </View>
             <View style={[styles.summaryDivider, { backgroundColor: 'rgba(255,255,255,0.15)' }]} />
             <View style={styles.summaryRow}>
               <Text style={styles.summaryAmountLabel}>Montant</Text>
-              <Text style={styles.summaryAmountValue}>{formatEuros(montant)}</Text>
+              {isCalculatingBareme ? (
+                <ActivityIndicator color="#FFFFFF" />
+              ) : (
+                <Text style={styles.summaryAmountValue}>
+                  {montant !== null ? formatEuros(montant) : '-'}
+                </Text>
+              )}
             </View>
           </View>
         )}

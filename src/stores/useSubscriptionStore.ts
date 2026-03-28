@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  getProStatus,
   initializeIAP,
   setupPurchaseListeners,
   restorePurchases,
@@ -20,6 +21,7 @@ interface SubscriptionState {
 
   // Actions
   initialize: () => Promise<void>;
+  refreshStatus: () => Promise<boolean>;
   loadTripCount: () => Promise<void>;
   setPro: (productId: string) => void;
   restore: () => Promise<boolean>;
@@ -35,19 +37,43 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       totalTripCount: 0,
 
       initialize: async () => {
-        await initializeIAP();
         await get().loadTripCount();
+        try {
+          await initializeIAP();
+          await get().refreshStatus();
 
-        setupPurchaseListeners(
-          (purchase) => {
-            if (purchase.productId && isProPurchase(purchase.productId)) {
-              set({ isPro: true, productId: purchase.productId });
-            }
-          },
-          (error) => {
-            console.warn('Purchase error:', error);
-          },
-        );
+          setupPurchaseListeners(
+            (purchase) => {
+              if (purchase.productId && isProPurchase(purchase.productId)) {
+                set({ isPro: true, productId: purchase.productId });
+              }
+            },
+            (error) => {
+              console.warn('Purchase error:', error);
+            },
+          );
+        } catch (error) {
+          console.warn('IAP initialization failed:', error);
+        }
+      },
+
+      refreshStatus: async () => {
+        try {
+          const activePurchase = await getProStatus();
+          const isPro = Boolean(
+            activePurchase?.productId && isProPurchase(activePurchase.productId),
+          );
+
+          set({
+            isPro,
+            productId: isPro ? activePurchase?.productId ?? null : null,
+          });
+
+          return isPro;
+        } catch (error) {
+          console.warn('Subscription status refresh failed:', error);
+          return get().isPro;
+        }
       },
 
       loadTripCount: async () => {
@@ -73,6 +99,7 @@ export const useSubscriptionStore = create<SubscriptionState>()(
             set({ isPro: true, productId: proPurchase.productId });
             return true;
           }
+          set({ isPro: false, productId: null });
           return false;
         } catch {
           return false;

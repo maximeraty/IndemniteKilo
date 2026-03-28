@@ -8,11 +8,13 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../theme/ThemeContext';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useVehiculeStore } from '../stores/useVehiculeStore';
 import { useAuthStore } from '../stores/useAuthStore';
 import { useSubscriptionStore, FREE_TRIP_LIMIT } from '../stores/useSubscriptionStore';
+import { getVehiculeDescription } from '../services/indemniteService';
 import type { ParametresScreenProps } from '../types/navigation';
 
 export function ParametresScreen({ navigation }: ParametresScreenProps) {
@@ -20,8 +22,15 @@ export function ParametresScreen({ navigation }: ParametresScreenProps) {
   const { userName, companyName, updateProfile } = useSettingsStore();
   const { vehicules } = useVehiculeStore();
   const logout = useAuthStore((s) => s.logout);
-  const { isPro, totalTripCount } = useSubscriptionStore();
+  const { isPro, totalTripCount, refreshStatus, loadTripCount } = useSubscriptionStore();
   const defaultVehicule = vehicules[0];
+
+  useFocusEffect(
+    React.useCallback(() => {
+      loadTripCount();
+      refreshStatus();
+    }, [loadTripCount, refreshStatus])
+  );
 
   const editField = (label: string, currentValue: string, key: 'userName' | 'companyName') => {
     Alert.prompt(
@@ -170,7 +179,7 @@ export function ParametresScreen({ navigation }: ParametresScreenProps) {
               </Text>
               {defaultVehicule && (
                 <Text style={[styles.actionCardSub, { color: colors.textSecondary }]}>
-                  {defaultVehicule.puissance_fiscale} CV
+                  {getVehiculeDescription(defaultVehicule)}
                 </Text>
               )}
             </View>

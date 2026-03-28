@@ -1,5 +1,7 @@
 import { create } from 'zustand';
 import * as db from '../services/db';
+import { recalculateTrajetAmountsForVehicule } from '../services/indemniteService';
+import { useTrajetStore } from './useTrajetStore';
 import type { Vehicule, VehiculeFormData } from '../types/vehicule';
 
 interface VehiculeState {
@@ -36,8 +38,11 @@ export const useVehiculeStore = create<VehiculeState>((set) => ({
 
   editVehicule: async (id, data) => {
     await db.updateVehicule(id, data);
+    await recalculateTrajetAmountsForVehicule(id);
     const vehicules = await db.getAllVehicules();
     set({ vehicules });
+    await useTrajetStore.getState().loadTrajets();
+    await useTrajetStore.getState().loadMonthlySummary();
   },
 
   removeVehicule: async (id) => {

@@ -2,9 +2,12 @@ import { create } from 'zustand';
 import * as db from '../services/db';
 import * as exportService from '../services/exportService';
 import { useSettingsStore } from './useSettingsStore';
+import { useSubscriptionStore } from './useSubscriptionStore';
 import { getMonthRange, getCurrentYearMonth } from '../utils/dateUtils';
 import type { RapportFilters, RapportData } from '../types/rapport';
 import type { TrajetStatut } from '../types/trajet';
+
+export const PREMIUM_REQUIRED_ERROR_CODE = 'PREMIUM_REQUIRED';
 
 interface ReportState {
   filters: RapportFilters;
@@ -85,6 +88,12 @@ export const useReportStore = create<ReportState>((set, get) => {
     exportPDF: async () => {
       const { reportData } = get();
       if (!reportData) throw new Error('Générez d\'abord un rapport');
+      const hasPremiumAccess = await useSubscriptionStore.getState().refreshStatus();
+      if (!hasPremiumAccess) {
+        const error = new Error('Un abonnement actif est requis pour exporter.');
+        (error as Error & { code?: string }).code = PREMIUM_REQUIRED_ERROR_CODE;
+        throw error;
+      }
       const uri = await exportService.generatePDF(reportData);
       await db.markTrajetsAsExported(reportData.trajets.map((t) => t.id));
       return uri;
@@ -93,6 +102,12 @@ export const useReportStore = create<ReportState>((set, get) => {
     exportExcel: async () => {
       const { reportData } = get();
       if (!reportData) throw new Error('Générez d\'abord un rapport');
+      const hasPremiumAccess = await useSubscriptionStore.getState().refreshStatus();
+      if (!hasPremiumAccess) {
+        const error = new Error('Un abonnement actif est requis pour exporter.');
+        (error as Error & { code?: string }).code = PREMIUM_REQUIRED_ERROR_CODE;
+        throw error;
+      }
       const uri = await exportService.generateExcel(reportData);
       await db.markTrajetsAsExported(reportData.trajets.map((t) => t.id));
       return uri;

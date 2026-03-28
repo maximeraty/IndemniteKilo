@@ -11,7 +11,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { useTheme } from '../theme/ThemeContext';
 import { useVehiculeStore } from '../stores/useVehiculeStore';
 import { EmptyState } from '../components/ui/EmptyState';
-import { formatEuros } from '../utils/formatting';
+import { getVehiculeDescription } from '../services/indemniteService';
 import type { VehiculesScreenProps } from '../types/navigation';
 import type { Vehicule } from '../types/vehicule';
 
@@ -74,15 +74,15 @@ export function VehiculesScreen({ navigation }: VehiculesScreenProps) {
         <View style={styles.separator} />
         <View style={styles.cardFooter}>
           <View>
-            <Text style={[styles.footerLabel, { color: colors.textSecondary }]}>TARIF</Text>
+            <Text style={[styles.footerLabel, { color: colors.textSecondary }]}>BARÈME</Text>
             <Text style={[styles.footerValue, { color: colors.text }]}>
-              {formatEuros(item.tarif_km)}/km
+              URSSAF
             </Text>
           </View>
           <View style={styles.footerRight}>
-            <Text style={[styles.footerLabel, { color: colors.textSecondary }]}>PUISSANCE</Text>
+            <Text style={[styles.footerLabel, { color: colors.textSecondary }]}>VÉHICULE</Text>
             <Text style={[styles.footerValue, { color: colors.text }]}>
-              {item.puissance_fiscale} CV
+              {getVehiculeDescription(item)}
             </Text>
           </View>
         </View>

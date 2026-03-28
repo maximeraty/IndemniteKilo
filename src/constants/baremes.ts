@@ -1,5 +1,5 @@
-// Barème kilométrique fiscal 2024 (véhicules automobiles)
-// Source : Administration fiscale française
+// Barème kilométrique URSSAF pour les automobiles.
+// Le barème est majoré de 20 % pour les véhicules électriques.
 
 interface BaremeTranche {
   kmMax: number;
@@ -13,7 +13,7 @@ interface BaremeEntry {
   tranches: BaremeTranche[];
 }
 
-export const BAREMES_2024: BaremeEntry[] = [
+export const BAREMES_URSSAF_VOITURE: BaremeEntry[] = [
   {
     cvMin: 0, cvMax: 3,
     tranches: [
@@ -56,11 +56,24 @@ export const BAREMES_2024: BaremeEntry[] = [
   },
 ];
 
-export function calculerIndemniteBareme(
+function roundToCents(value: number): number {
+  return Math.round(value * 100) / 100;
+}
+
+export function getDistanceEffective(
+  distanceKm: number,
+  allerRetour: boolean
+): number {
+  return allerRetour ? distanceKm * 2 : distanceKm;
+}
+
+function calculerIndemniteBrute(
   puissanceFiscale: number,
   distanceAnnuelleKm: number
 ): number {
-  const entry = BAREMES_2024.find(
+  if (puissanceFiscale <= 0 || distanceAnnuelleKm <= 0) return 0;
+
+  const entry = BAREMES_URSSAF_VOITURE.find(
     (b) => puissanceFiscale >= b.cvMin && puissanceFiscale <= b.cvMax
   );
   if (!entry) return 0;
@@ -68,19 +81,59 @@ export function calculerIndemniteBareme(
   const tranche = entry.tranches.find((t) => distanceAnnuelleKm <= t.kmMax);
   if (!tranche) return 0;
 
-  return Math.round(
-    (distanceAnnuelleKm * tranche.coefficient + tranche.constant) * 100
-  ) / 100;
+  return distanceAnnuelleKm * tranche.coefficient + tranche.constant;
+}
+
+export function calculerIndemniteBareme(
+  puissanceFiscale: number,
+  distanceAnnuelleKm: number,
+  isElectrique = false
+): number {
+  const montant = calculerIndemniteBrute(
+    puissanceFiscale,
+    distanceAnnuelleKm
+  );
+  const majore = isElectrique ? montant * 1.2 : montant;
+  return roundToCents(majore);
 }
 
 export function getTarifParKm(
   puissanceFiscale: number,
-  distanceAnnuelleEstimee: number
+  distanceAnnuelleEstimee: number,
+  isElectrique = false
 ): number {
   const montantTotal = calculerIndemniteBareme(
     puissanceFiscale,
-    distanceAnnuelleEstimee
+    distanceAnnuelleEstimee,
+    isElectrique
   );
   if (distanceAnnuelleEstimee === 0) return 0;
   return Math.round((montantTotal / distanceAnnuelleEstimee) * 1000) / 1000;
+}
+
+export function calculerMontantTrajetBareme(params: {
+  puissanceFiscale: number;
+  isElectrique: boolean;
+  distanceAvantKm: number;
+  distanceTrajetKm: number;
+  allerRetour: boolean;
+}): number {
+  const distanceEffective = getDistanceEffective(
+    params.distanceTrajetKm,
+    params.allerRetour
+  );
+  if (distanceEffective <= 0) return 0;
+
+  const totalAvant = calculerIndemniteBareme(
+    params.puissanceFiscale,
+    params.distanceAvantKm,
+    params.isElectrique
+  );
+  const totalApres = calculerIndemniteBareme(
+    params.puissanceFiscale,
+    params.distanceAvantKm + distanceEffective,
+    params.isElectrique
+  );
+
+  return roundToCents(totalApres - totalAvant);
 }

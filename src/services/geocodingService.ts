@@ -1,24 +1,19 @@
-export interface GeocodingResult {
-  display_name: string;
-  lat: string;
-  lon: string;
-  address?: {
-    road?: string;
-    house_number?: string;
-    city?: string;
-    town?: string;
-    village?: string;
-    postcode?: string;
-  };
-}
+import { NativeModules, Platform } from 'react-native';
+import type { PlaceResult, RouteResult } from '../types/places';
 
-export interface RouteResult {
-  distance_km: number;
-  duration_min: number;
-}
+export type GeocodingResult = PlaceResult;
 
 const NOMINATIM_BASE = 'https://nominatim.openstreetmap.org';
 const OSRM_BASE = 'https://router.project-osrm.org';
+const AppleMapsModule = NativeModules.AppleMapsModule as {
+  searchPlaces?: (query: string, limit: number) => Promise<GeocodingResult[]>;
+  calculateRoute?: (
+    fromLat: number,
+    fromLon: number,
+    toLat: number,
+    toLon: number
+  ) => Promise<RouteResult>;
+};
 
 /**
  * Search addresses using OpenStreetMap Nominatim API.
@@ -28,6 +23,10 @@ export async function searchAddress(
   limit = 5
 ): Promise<GeocodingResult[]> {
   if (!query || query.trim().length < 2) return [];
+
+  if (Platform.OS === 'ios' && AppleMapsModule?.searchPlaces) {
+    return AppleMapsModule.searchPlaces(query.trim(), limit);
+  }
 
   const params = new URLSearchParams({
     q: query.trim(),
@@ -48,7 +47,14 @@ export async function searchAddress(
     throw new Error(`Nominatim error: ${response.status}`);
   }
 
-  return response.json();
+  const results = await response.json() as GeocodingResult[];
+  return results.map((result) => ({
+    ...result,
+    title: formatOsmTitle(result),
+    subtitle: formatOsmSubtitle(result),
+    icon: 'location-outline',
+    source: 'osm',
+  }));
 }
 
 /**
@@ -60,6 +66,10 @@ export async function calculateRoute(
   toLat: number,
   toLon: number
 ): Promise<RouteResult> {
+  if (Platform.OS === 'ios' && AppleMapsModule?.calculateRoute) {
+    return AppleMapsModule.calculateRoute(fromLat, fromLon, toLat, toLon);
+  }
+
   const url = `${OSRM_BASE}/route/v1/driving/${fromLon},${fromLat};${toLon},${toLat}?overview=false`;
 
   const response = await fetch(url, {
@@ -89,6 +99,8 @@ export async function calculateRoute(
  * Format a Nominatim result into a short display name.
  */
 export function formatShortAddress(result: GeocodingResult): string {
+  if (result.title?.trim()) return result.title.trim();
+
   const addr = result.address;
   if (!addr) return result.display_name;
 
@@ -109,7 +121,34 @@ export function formatShortAddress(result: GeocodingResult): string {
  * Get the city/town from a Nominatim result.
  */
 export function getCity(result: GeocodingResult): string {
+  if (result.subtitle?.trim()) return result.subtitle.trim();
+
   const addr = result.address;
   if (!addr) return '';
   return addr.city || addr.town || addr.village || '';
+}
+
+export function getPlaceIcon(result: GeocodingResult): string {
+  return result.icon || 'location-outline';
+}
+
+function formatOsmTitle(result: GeocodingResult): string {
+  const addr = result.address;
+  if (!addr) return result.display_name;
+
+  if (addr.house_number && addr.road) {
+    return `${addr.house_number} ${addr.road}`;
+  }
+  if (addr.road) return addr.road;
+
+  return result.display_name;
+}
+
+function formatOsmSubtitle(result: GeocodingResult): string {
+  const addr = result.address;
+  if (!addr) return '';
+
+  const city = addr.city || addr.town || addr.village;
+  const postal = addr.postcode;
+  return [postal, city].filter(Boolean).join(' ');
 }

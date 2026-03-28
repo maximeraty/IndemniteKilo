@@ -2,6 +2,7 @@ import { Platform } from 'react-native';
 import type { Trajet, TrajetStatut } from '../types/trajet';
 import type { Horodatage, HorodatageFormData } from '../types/horodatage';
 import type { Vehicule, VehiculeFormData } from '../types/vehicule';
+import type { FavoritePlaceKind, PlaceResult, SavedPlace } from '../types/places';
 
 let db: any = null;
 
@@ -31,7 +32,8 @@ async function initializeSchema(database: any): Promise<void> {
       nom TEXT NOT NULL,
       immatriculation TEXT NOT NULL DEFAULT '',
       tarif_km REAL NOT NULL,
-      puissance_fiscale INTEGER NOT NULL DEFAULT 0
+      puissance_fiscale INTEGER NOT NULL DEFAULT 0,
+      is_electrique INTEGER NOT NULL DEFAULT 0
     );
 
     CREATE TABLE IF NOT EXISTS trajets (
@@ -58,12 +60,120 @@ async function initializeSchema(database: any): Promise<void> {
       FOREIGN KEY (vehicule_id) REFERENCES vehicules(id)
     );
 
+    CREATE TABLE IF NOT EXISTS recent_places (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      place_key TEXT NOT NULL UNIQUE,
+      title TEXT NOT NULL,
+      subtitle TEXT NOT NULL DEFAULT '',
+      display_name TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      icon TEXT NOT NULL DEFAULT 'location-outline',
+      updated_at TEXT NOT NULL
+    );
+
+    CREATE TABLE IF NOT EXISTS favorite_places (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      place_key TEXT NOT NULL,
+      kind TEXT NOT NULL DEFAULT 'custom',
+      label TEXT NOT NULL DEFAULT '',
+      title TEXT NOT NULL,
+      subtitle TEXT NOT NULL DEFAULT '',
+      display_name TEXT NOT NULL,
+      latitude REAL NOT NULL,
+      longitude REAL NOT NULL,
+      icon TEXT NOT NULL DEFAULT 'star',
+      created_at TEXT NOT NULL
+    );
+
     CREATE INDEX IF NOT EXISTS idx_trajets_date ON trajets(date);
     CREATE INDEX IF NOT EXISTS idx_trajets_vehicule ON trajets(vehicule_id);
     CREATE INDEX IF NOT EXISTS idx_trajets_statut ON trajets(statut);
     CREATE INDEX IF NOT EXISTS idx_horodatages_date ON horodatages(date);
     CREATE INDEX IF NOT EXISTS idx_horodatages_vehicule ON horodatages(vehicule_id);
+    CREATE INDEX IF NOT EXISTS idx_recent_places_updated_at ON recent_places(updated_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_favorite_places_kind ON favorite_places(kind, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_favorite_places_key ON favorite_places(place_key);
   `);
+
+  await ensureColumn(
+    database,
+    'vehicules',
+    'puissance_fiscale',
+    'INTEGER NOT NULL DEFAULT 0'
+  );
+  await ensureColumn(
+    database,
+    'vehicules',
+    'is_electrique',
+    'INTEGER NOT NULL DEFAULT 0'
+  );
+}
+
+async function ensureColumn(
+  database: any,
+  tableName: string,
+  columnName: string,
+  definition: string
+): Promise<void> {
+  const columns = await database.getAllAsync(
+    `PRAGMA table_info(${tableName})`
+  ) as { name: string }[];
+
+  if (columns.some((column) => column.name === columnName)) {
+    return;
+  }
+
+  await database.execAsync(
+    `ALTER TABLE ${tableName} ADD COLUMN ${columnName} ${definition}`
+  );
+}
+
+function buildPlaceKey(place: PlaceResult): string {
+  const baseTitle = (place.title || place.display_name || '').trim().toLowerCase();
+  const lat = Number.parseFloat(place.lat).toFixed(5);
+  const lon = Number.parseFloat(place.lon).toFixed(5);
+  return `${baseTitle}::${lat}::${lon}`;
+}
+
+function rowToSavedPlace(row: any): SavedPlace {
+  return {
+    id: row.id,
+    label: row.label ?? '',
+    favorite_kind: (row.kind ?? 'custom') as FavoritePlaceKind,
+    title: row.title,
+    subtitle: row.subtitle,
+    display_name: row.display_name,
+    lat: String(row.latitude),
+    lon: String(row.longitude),
+    icon: row.icon,
+    source: 'apple',
+    created_at: row.created_at,
+    updated_at: row.updated_at,
+  };
+}
+
+function getFavoriteLabel(kind: FavoritePlaceKind, label?: string): string {
+  if (label?.trim()) return label.trim();
+  if (kind === 'home') return 'Maison';
+  if (kind === 'work') return 'Travail';
+  return 'Favori';
+}
+
+function getFavoriteIcon(kind: FavoritePlaceKind): string {
+  if (kind === 'home') return 'home';
+  if (kind === 'work') return 'briefcase';
+  return 'star';
+}
+
+function rowToVehicule(row: any): Vehicule {
+  return {
+    id: row.id,
+    nom: row.nom,
+    immatriculation: row.immatriculation ?? '',
+    puissance_fiscale: row.puissance_fiscale ?? 0,
+    is_electrique: row.is_electrique === 1,
+  };
 }
 
 // ──── Vehicules ────
@@ -71,23 +181,35 @@ async function initializeSchema(database: any): Promise<void> {
 export async function insertVehicule(data: VehiculeFormData): Promise<number> {
   const database = await getDatabase();
   const result = await database.runAsync(
-    'INSERT INTO vehicules (nom, immatriculation, tarif_km, puissance_fiscale) VALUES (?, ?, ?, ?)',
-    [data.nom, data.immatriculation, data.tarif_km, data.puissance_fiscale]
+    `INSERT INTO vehicules
+      (nom, immatriculation, tarif_km, puissance_fiscale, is_electrique)
+     VALUES (?, ?, ?, ?, ?)`,
+    [
+      data.nom,
+      data.immatriculation,
+      0,
+      data.puissance_fiscale,
+      data.is_electrique ? 1 : 0,
+    ]
   );
   return result.lastInsertRowId;
 }
 
 export async function getAllVehicules(): Promise<Vehicule[]> {
   const database = await getDatabase();
-  return await database.getAllAsync('SELECT * FROM vehicules ORDER BY nom') as Vehicule[];
+  const rows = await database.getAllAsync(
+    'SELECT * FROM vehicules ORDER BY nom'
+  ) as any[];
+  return rows.map(rowToVehicule);
 }
 
 export async function getVehiculeById(id: number): Promise<Vehicule | null> {
   const database = await getDatabase();
-  return await database.getFirstAsync(
+  const row = await database.getFirstAsync(
     'SELECT * FROM vehicules WHERE id = ?',
     [id]
-  ) as Vehicule | null;
+  ) as any | null;
+  return row ? rowToVehicule(row) : null;
 }
 
 export async function updateVehicule(
@@ -96,8 +218,17 @@ export async function updateVehicule(
 ): Promise<void> {
   const database = await getDatabase();
   await database.runAsync(
-    'UPDATE vehicules SET nom = ?, immatriculation = ?, tarif_km = ?, puissance_fiscale = ? WHERE id = ?',
-    [data.nom, data.immatriculation, data.tarif_km, data.puissance_fiscale, id]
+    `UPDATE vehicules
+     SET nom = ?, immatriculation = ?, tarif_km = ?, puissance_fiscale = ?, is_electrique = ?
+     WHERE id = ?`,
+    [
+      data.nom,
+      data.immatriculation,
+      0,
+      data.puissance_fiscale,
+      data.is_electrique ? 1 : 0,
+      id,
+    ]
   );
 }
 
@@ -170,6 +301,34 @@ export async function getTrajetsByMonth(yearMonth: string): Promise<Trajet[]> {
   return rows.map(rowToTrajet);
 }
 
+export async function getTrajetsByVehiculeAndYear(
+  vehiculeId: number,
+  year: string
+): Promise<Trajet[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync(
+    `SELECT * FROM trajets
+     WHERE vehicule_id = ? AND date LIKE ?
+     ORDER BY date ASC, id ASC`,
+    [vehiculeId, `${year}%`]
+  ) as any[];
+  return rows.map(rowToTrajet);
+}
+
+export async function getTrajetYearsForVehicule(
+  vehiculeId: number
+): Promise<string[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync(
+    `SELECT DISTINCT SUBSTR(date, 1, 4) as year
+     FROM trajets
+     WHERE vehicule_id = ?
+     ORDER BY year ASC`,
+    [vehiculeId]
+  ) as { year: string }[];
+  return rows.map((row) => row.year);
+}
+
 export async function getTrajetsByPeriod(
   dateDebut: string,
   dateFin: string,
@@ -238,6 +397,17 @@ export async function updateTrajetStatut(
     statut,
     id,
   ]);
+}
+
+export async function updateTrajetMontant(
+  id: number,
+  montant: number
+): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync(
+    'UPDATE trajets SET montant_eur = ? WHERE id = ?',
+    [montant, id]
+  );
 }
 
 export async function deleteTrajet(id: number): Promise<void> {
@@ -333,6 +503,118 @@ export async function updateHorodatage(
 export async function deleteHorodatage(id: number): Promise<void> {
   const database = await getDatabase();
   await database.runAsync('DELETE FROM horodatages WHERE id = ?', [id]);
+}
+
+// ──── Saved places ────
+
+export async function getRecentPlaces(limit = 6): Promise<SavedPlace[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync(
+    'SELECT * FROM recent_places ORDER BY updated_at DESC LIMIT ?',
+    [limit]
+  ) as any[];
+  return rows.map((row) => ({
+    ...rowToSavedPlace(row),
+    favorite_kind: 'custom',
+  }));
+}
+
+export async function saveRecentPlace(place: PlaceResult, maxItems = 8): Promise<void> {
+  const database = await getDatabase();
+  const placeKey = buildPlaceKey(place);
+  const now = new Date().toISOString();
+  const title = (place.title || place.display_name).trim();
+  const subtitle = place.subtitle?.trim() || '';
+
+  await database.runAsync('DELETE FROM recent_places WHERE place_key = ?', [placeKey]);
+  await database.runAsync(
+    `INSERT INTO recent_places
+      (place_key, title, subtitle, display_name, latitude, longitude, icon, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      placeKey,
+      title,
+      subtitle,
+      place.display_name,
+      Number.parseFloat(place.lat),
+      Number.parseFloat(place.lon),
+      place.icon || 'location-outline',
+      now,
+    ]
+  );
+  await database.runAsync(
+    `DELETE FROM recent_places
+     WHERE id NOT IN (
+       SELECT id FROM recent_places ORDER BY updated_at DESC LIMIT ?
+     )`,
+    [maxItems]
+  );
+}
+
+export async function clearRecentPlaces(): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync('DELETE FROM recent_places');
+}
+
+export async function getFavoritePlaces(): Promise<SavedPlace[]> {
+  const database = await getDatabase();
+  const rows = await database.getAllAsync(
+    `SELECT * FROM favorite_places
+     ORDER BY
+       CASE kind
+         WHEN 'home' THEN 0
+         WHEN 'work' THEN 1
+         ELSE 2
+       END,
+       created_at ASC`
+  ) as any[];
+  return rows.map(rowToSavedPlace);
+}
+
+export async function saveFavoritePlace(
+  place: PlaceResult,
+  kind: FavoritePlaceKind = 'custom',
+  label?: string
+): Promise<void> {
+  const database = await getDatabase();
+  const placeKey = buildPlaceKey(place);
+  const title = (place.title || place.display_name).trim();
+  const subtitle = place.subtitle?.trim() || '';
+  const favoriteLabel = getFavoriteLabel(kind, label);
+  const icon = getFavoriteIcon(kind);
+
+  if (kind === 'home' || kind === 'work') {
+    await database.runAsync('DELETE FROM favorite_places WHERE kind = ?', [kind]);
+  } else {
+    const existing = await database.getFirstAsync(
+      'SELECT id FROM favorite_places WHERE kind = ? AND place_key = ?',
+      [kind, placeKey]
+    ) as { id: number } | null;
+    if (existing) return;
+  }
+
+  await database.runAsync(
+    `INSERT INTO favorite_places
+      (place_key, kind, label, title, subtitle, display_name, latitude, longitude, icon, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    [
+      placeKey,
+      kind,
+      favoriteLabel,
+      title,
+      subtitle,
+      place.display_name,
+      Number.parseFloat(place.lat),
+      Number.parseFloat(place.lon),
+      icon,
+      new Date().toISOString(),
+    ]
+  );
+}
+
+export async function removeFavoritePlace(id: number): Promise<void> {
+  const database = await getDatabase();
+  await database.runAsync('DELETE FROM favorite_places WHERE id = ?', [id]);
 }
 
 export interface MonthlySummary {

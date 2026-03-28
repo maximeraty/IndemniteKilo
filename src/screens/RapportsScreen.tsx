@@ -11,19 +11,25 @@ import {
   Pressable,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+import type { BottomTabNavigationProp } from '@react-navigation/bottom-tabs';
 import { useTheme } from '../theme/ThemeContext';
-import { useReportStore } from '../stores/useReportStore';
+import { PREMIUM_REQUIRED_ERROR_CODE, useReportStore } from '../stores/useReportStore';
 import { useVehiculeStore } from '../stores/useVehiculeStore';
 import { useSettingsStore } from '../stores/useSettingsStore';
+import { useSubscriptionStore } from '../stores/useSubscriptionStore';
 import { formatEuros } from '../utils/formatting';
 import { getMonthRange, formatMonthYear } from '../utils/dateUtils';
+import type { TabParamList } from '../types/navigation';
 
 const MOIS_COURTS = ['Jan', 'Fév', 'Mar', 'Avr', 'Mai', 'Juin', 'Juil', 'Août', 'Sep', 'Oct', 'Nov', 'Déc'];
 
 export function RapportsScreen() {
   const { colors } = useTheme();
+  const navigation = useNavigation<BottomTabNavigationProp<TabParamList>>();
   const { vehicules, loadVehicules } = useVehiculeStore();
   const { userName, companyName } = useSettingsStore();
+  const refreshSubscriptionStatus = useSubscriptionStore((s) => s.refreshStatus);
   const {
     filters,
     reportData,
@@ -42,7 +48,13 @@ export function RapportsScreen() {
 
   useEffect(() => {
     loadVehicules();
-  }, []);
+  }, [loadVehicules]);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshSubscriptionStatus();
+    }, [refreshSubscriptionStatus])
+  );
 
   const currentYearMonth = filters.date_debut.substring(0, 7);
   const selectedMonthIndex = parseInt(filters.date_debut.substring(5, 7)) - 1;
@@ -73,29 +85,57 @@ export function RapportsScreen() {
     }
   }, [generateReport]);
 
+  const ensurePremiumAccess = useCallback(async () => {
+    const hasActiveSubscription = await refreshSubscriptionStatus();
+    if (hasActiveSubscription) {
+      return true;
+    }
+
+    navigation.navigate('Parametres', { screen: 'Paywall' });
+    return false;
+  }, [navigation, refreshSubscriptionStatus]);
+
   const handleExportPDF = useCallback(async () => {
+    const canExport = await ensurePremiumAccess();
+    if (!canExport) {
+      return;
+    }
+
     setIsExporting(true);
     try {
       const uri = await exportPDF();
       await shareFile(uri);
-    } catch {
+    } catch (error: any) {
+      if (error?.code === PREMIUM_REQUIRED_ERROR_CODE) {
+        navigation.navigate('Parametres', { screen: 'Paywall' });
+        return;
+      }
       Alert.alert('Erreur', 'Impossible de générer le PDF.');
     } finally {
       setIsExporting(false);
     }
-  }, [exportPDF, shareFile]);
+  }, [ensurePremiumAccess, exportPDF, navigation, shareFile]);
 
   const handleExportExcel = useCallback(async () => {
+    const canExport = await ensurePremiumAccess();
+    if (!canExport) {
+      return;
+    }
+
     setIsExporting(true);
     try {
       const uri = await exportExcel();
       await shareFile(uri);
-    } catch {
+    } catch (error: any) {
+      if (error?.code === PREMIUM_REQUIRED_ERROR_CODE) {
+        navigation.navigate('Parametres', { screen: 'Paywall' });
+        return;
+      }
       Alert.alert('Erreur', 'Impossible de générer le fichier Excel.');
     } finally {
       setIsExporting(false);
     }
-  }, [exportExcel, shareFile]);
+  }, [ensurePremiumAccess, exportExcel, navigation, shareFile]);
 
   return (
     <>

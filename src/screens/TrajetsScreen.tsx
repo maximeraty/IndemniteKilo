@@ -9,6 +9,7 @@ import {
   Alert,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../theme/ThemeContext';
 import { useTrajetStore } from '../stores/useTrajetStore';
 import { useVehiculeStore } from '../stores/useVehiculeStore';
@@ -48,7 +49,7 @@ export function TrajetsScreen({ navigation }: TrajetsScreenProps) {
     removeHorodatage,
   } = useTrajetStore();
   const { vehicules } = useVehiculeStore();
-  const { canCreateTrip, loadTripCount } = useSubscriptionStore();
+  const { canCreateTrip, loadTripCount, refreshStatus } = useSubscriptionStore();
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -57,6 +58,13 @@ export function TrajetsScreen({ navigation }: TrajetsScreenProps) {
     loadMonthlySummary();
     loadTripCount();
   }, [currentMonth]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadTripCount();
+      refreshStatus();
+    }, [loadTripCount, refreshStatus])
+  );
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -107,7 +115,7 @@ export function TrajetsScreen({ navigation }: TrajetsScreenProps) {
     [getVehiculeName, removeHorodatage]
   );
 
-  const handleAdd = useCallback(() => {
+  const handleAdd = useCallback(async () => {
     if (vehicules.length === 0) {
       Alert.alert(
         'Aucun véhicule',
@@ -125,6 +133,9 @@ export function TrajetsScreen({ navigation }: TrajetsScreenProps) {
       );
       return;
     }
+
+    await refreshStatus();
+
     if (!canCreateTrip()) {
       navigation.navigate('Paywall');
       return;
@@ -144,7 +155,7 @@ export function TrajetsScreen({ navigation }: TrajetsScreenProps) {
         },
       ]
     );
-  }, [navigation, vehicules, canCreateTrip]);
+  }, [navigation, vehicules, canCreateTrip, refreshStatus]);
 
   // Group entries by date for section list
   const sections = useMemo(() => {

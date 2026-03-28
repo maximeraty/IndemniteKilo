@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import * as db from '../services/db';
-import { calculerMontant } from '../services/distanceService';
+import { recalculateTrajetAmountsForVehicleYear } from '../services/indemniteService';
 import { getCurrentYearMonth } from '../utils/dateUtils';
 import { useSubscriptionStore } from './useSubscriptionStore';
 import type { Trajet, TrajetStatut, TrajetFormData } from '../types/trajet';
@@ -16,8 +16,8 @@ interface TrajetState {
   loadTrajets: () => Promise<void>;
   loadMonthlySummary: () => Promise<void>;
   setCurrentMonth: (month: string) => void;
-  addTrajet: (data: TrajetFormData, tarifKm: number) => Promise<number>;
-  editTrajet: (id: number, data: TrajetFormData, tarifKm: number) => Promise<void>;
+  addTrajet: (data: TrajetFormData) => Promise<number>;
+  editTrajet: (id: number, data: TrajetFormData) => Promise<void>;
   removeTrajet: (id: number) => Promise<void>;
   addHorodatage: (data: HorodatageFormData) => Promise<number>;
   editHorodatage: (id: number, data: HorodatageFormData) => Promise<void>;
@@ -59,8 +59,7 @@ export const useTrajetStore = create<TrajetState>((set, get) => ({
     set({ currentMonth: month });
   },
 
-  addTrajet: async (data, tarifKm) => {
-    const montant = calculerMontant(data.distance_km!, tarifKm, data.aller_retour);
+  addTrajet: async (data) => {
     const id = await db.insertTrajet({
       date: data.date,
       adresse_depart: data.adresse_depart,
@@ -69,8 +68,12 @@ export const useTrajetStore = create<TrajetState>((set, get) => ({
       aller_retour: data.aller_retour,
       motif: data.motif,
       vehicule_id: data.vehicule_id!,
-      montant_eur: montant,
+      montant_eur: 0,
     });
+    await recalculateTrajetAmountsForVehicleYear(
+      data.vehicule_id!,
+      data.date.slice(0, 4)
+    );
     await get().loadTrajets();
     await get().loadMonthlySummary();
     // Update trip count for paywall
@@ -78,8 +81,10 @@ export const useTrajetStore = create<TrajetState>((set, get) => ({
     return id;
   },
 
-  editTrajet: async (id, data, tarifKm) => {
-    const montant = calculerMontant(data.distance_km!, tarifKm, data.aller_retour);
+  editTrajet: async (id, data) => {
+    const existingTrajet = await db.getTrajetById(id);
+    if (!existingTrajet) return;
+
     await db.updateTrajet(id, {
       date: data.date,
       adresse_depart: data.adresse_depart,
@@ -88,14 +93,42 @@ export const useTrajetStore = create<TrajetState>((set, get) => ({
       aller_retour: data.aller_retour,
       motif: data.motif,
       vehicule_id: data.vehicule_id!,
-      montant_eur: montant,
+      montant_eur: 0,
     });
+
+    const affectedPeriods = new Map<string, { vehiculeId: number; year: string }>();
+    affectedPeriods.set(
+      `${existingTrajet.vehicule_id}-${existingTrajet.date.slice(0, 4)}`,
+      {
+        vehiculeId: existingTrajet.vehicule_id,
+        year: existingTrajet.date.slice(0, 4),
+      }
+    );
+    affectedPeriods.set(
+      `${data.vehicule_id!}-${data.date.slice(0, 4)}`,
+      {
+        vehiculeId: data.vehicule_id!,
+        year: data.date.slice(0, 4),
+      }
+    );
+
+    for (const { vehiculeId, year } of affectedPeriods.values()) {
+      await recalculateTrajetAmountsForVehicleYear(vehiculeId, year);
+    }
+
     await get().loadTrajets();
     await get().loadMonthlySummary();
   },
 
   removeTrajet: async (id) => {
+    const existingTrajet = await db.getTrajetById(id);
     await db.deleteTrajet(id);
+    if (existingTrajet) {
+      await recalculateTrajetAmountsForVehicleYear(
+        existingTrajet.vehicule_id,
+        existingTrajet.date.slice(0, 4)
+      );
+    }
     await get().loadTrajets();
     await get().loadMonthlySummary();
     useSubscriptionStore.getState().loadTripCount();

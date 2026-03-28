@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect } from 'react';
 import {
   View,
   Text,
@@ -7,14 +7,19 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  Linking,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { ErrorCode } from 'expo-iap';
+import { LEGAL_URLS } from '../constants/legal';
 import { useTheme } from '../theme/ThemeContext';
 import { useSubscriptionStore, type SubscriptionPlan } from '../stores/useSubscriptionStore';
 import {
+  getProducts,
   purchaseSubscription,
   purchaseProduct,
   PRODUCT_IDS,
+  type StoreProductInfo,
 } from '../services/iapService';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 
@@ -24,7 +29,7 @@ const PLANS: {
   key: SubscriptionPlan;
   title: string;
   subtitle: string;
-  price: string;
+  fallbackPrice: string;
   priceLabel: string;
   productId: string;
   featured: boolean;
@@ -34,7 +39,7 @@ const PLANS: {
     key: 'monthly',
     title: 'Mensuel',
     subtitle: 'Sans engagement',
-    price: '4,99 €',
+    fallbackPrice: '--',
     priceLabel: '/ MOIS',
     productId: PRODUCT_IDS.MONTHLY,
     featured: false,
@@ -43,7 +48,7 @@ const PLANS: {
     key: 'yearly',
     title: 'Annuel',
     subtitle: 'Économisez 40%',
-    price: '35,00 €',
+    fallbackPrice: '--',
     priceLabel: 'SOIT 2,91 € / MOIS',
     productId: PRODUCT_IDS.YEARLY,
     featured: true,
@@ -53,7 +58,7 @@ const PLANS: {
     key: 'lifetime',
     title: 'À vie (Lifetime)',
     subtitle: 'Paiement unique',
-    price: '99,00 €',
+    fallbackPrice: '--',
     priceLabel: 'ONE-TIME',
     productId: PRODUCT_IDS.LIFETIME,
     featured: false,
@@ -63,8 +68,6 @@ const PLANS: {
 const FEATURES = [
   'Trajets illimités',
   'Exports PDF & Excel illimités',
-  'Synchronisation Cloud sécurisée',
-  'Support prioritaire',
 ];
 
 export function PaywallScreen({ navigation }: PaywallScreenProps) {
@@ -72,7 +75,44 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan>('yearly');
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
+  const [isLoadingProducts, setIsLoadingProducts] = useState(true);
+  const [productsById, setProductsById] = useState<Record<string, StoreProductInfo>>({});
   const { restore } = useSubscriptionStore();
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const loadProducts = async () => {
+      try {
+        const products = await getProducts();
+        if (!isMounted) return;
+
+        const nextProducts = products.reduce<Record<string, StoreProductInfo>>((acc, product) => {
+          acc[product.id] = product;
+          return acc;
+        }, {});
+
+        setProductsById(nextProducts);
+      } catch {
+        if (isMounted) {
+          setProductsById({});
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingProducts(false);
+        }
+      }
+    };
+
+    loadProducts();
+
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const selectedProductId = PLANS.find((plan) => plan.key === selectedPlan)?.productId;
+  const selectedProduct = selectedProductId ? productsById[selectedProductId] : undefined;
 
   const handlePurchase = useCallback(async () => {
     const plan = PLANS.find((p) => p.key === selectedPlan);
@@ -85,11 +125,13 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
       } else {
         await purchaseSubscription(plan.productId);
       }
-      // Success is handled by the purchase listener in the store
       navigation.goBack();
     } catch (err: any) {
-      if (err?.code !== 'E_USER_CANCELLED') {
-        Alert.alert('Erreur', "L'achat n'a pas pu être finalisé. Veuillez réessayer.");
+      if (err?.code !== ErrorCode.UserCancelled) {
+        Alert.alert(
+          'Erreur',
+          err?.message || "L'achat n'a pas pu être finalisé. Veuillez réessayer.",
+        );
       }
     } finally {
       setIsPurchasing(false);
@@ -114,9 +156,28 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
     }
   }, [restore, navigation]);
 
+  const openLegalUrl = useCallback(async (url: string, label: string) => {
+    if (!url) {
+      Alert.alert(
+        'Lien manquant',
+        `Configurez l'URL ${label.toLowerCase()} dans src/constants/legal.ts avant la soumission App Store.`,
+      );
+      return;
+    }
+
+    try {
+      const supported = await Linking.canOpenURL(url);
+      if (!supported) {
+        throw new Error('unsupported-url');
+      }
+      await Linking.openURL(url);
+    } catch {
+      Alert.alert('Erreur', `Impossible d'ouvrir ${label.toLowerCase()}.`);
+    }
+  }, []);
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
-      {/* Header */}
       <View style={styles.header}>
         <TouchableOpacity
           style={styles.closeButton}
@@ -133,7 +194,6 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
       >
-        {/* Hero */}
         <View style={styles.heroSection}>
           <View style={styles.heroIcon}>
             <Ionicons name="car" size={36} color="#FFFFFF" />
@@ -150,7 +210,6 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
           </Text>
         </View>
 
-        {/* Features */}
         <View style={styles.featuresSection}>
           {FEATURES.map((feature) => (
             <View
@@ -165,10 +224,13 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
           ))}
         </View>
 
-        {/* Plans */}
         <View style={styles.plansSection}>
           {PLANS.map((plan) => {
             const isSelected = selectedPlan === plan.key;
+            const storeProduct = productsById[plan.productId];
+            const price = storeProduct?.displayPrice || plan.fallbackPrice;
+            const isAvailable = Boolean(storeProduct);
+            const isDisabled = !isAvailable && !isLoadingProducts;
 
             if (plan.featured) {
               return (
@@ -176,12 +238,14 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                   key={plan.key}
                   activeOpacity={0.8}
                   onPress={() => setSelectedPlan(plan.key)}
+                  disabled={isDisabled}
                 >
                   <View
                     style={[
                       styles.planCard,
                       styles.planCardFeatured,
                       isSelected && styles.planCardSelected,
+                      isDisabled && styles.planCardDisabled,
                     ]}
                   >
                     {plan.badge && (
@@ -193,9 +257,12 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                       <View>
                         <Text style={styles.planTitleWhite}>{plan.title}</Text>
                         <Text style={styles.planSubtitleFeatured}>{plan.subtitle}</Text>
+                        {isDisabled ? (
+                          <Text style={styles.planUnavailableText}>Produit indisponible</Text>
+                        ) : null}
                       </View>
                       <View style={styles.planPriceRight}>
-                        <Text style={styles.planPriceWhite}>{plan.price}</Text>
+                        <Text style={styles.planPriceWhite}>{price}</Text>
                         <Text style={styles.planPriceLabelFeatured}>{plan.priceLabel}</Text>
                       </View>
                     </View>
@@ -213,9 +280,11 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                     backgroundColor: colors.surface,
                     borderColor: isSelected ? colors.primary : 'transparent',
                   },
+                  isDisabled && styles.planCardDisabled,
                 ]}
                 activeOpacity={0.8}
                 onPress={() => setSelectedPlan(plan.key)}
+                disabled={isDisabled}
               >
                 <View style={styles.planContent}>
                   <View>
@@ -223,9 +292,12 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                     <Text style={[styles.planSubtitle, { color: colors.textSecondary }]}>
                       {plan.subtitle}
                     </Text>
+                    {isDisabled ? (
+                      <Text style={styles.planUnavailableText}>Produit indisponible</Text>
+                    ) : null}
                   </View>
                   <View style={styles.planPriceRight}>
-                    <Text style={[styles.planPrice, { color: colors.text }]}>{plan.price}</Text>
+                    <Text style={[styles.planPrice, { color: colors.text }]}>{price}</Text>
                     <Text style={[styles.planPriceLabel, { color: colors.textSecondary }]}>
                       {plan.priceLabel}
                     </Text>
@@ -236,23 +308,32 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
           })}
         </View>
 
-        {/* CTA */}
+        {isLoadingProducts ? (
+          <Text style={[styles.storeStatusText, { color: colors.textSecondary }]}>
+            Chargement des offres App Store...
+          </Text>
+        ) : null}
+
         <TouchableOpacity
-          style={styles.ctaButton}
+          style={[
+            styles.ctaButton,
+            (!selectedProduct || isLoadingProducts) && styles.ctaButtonDisabled,
+          ]}
           onPress={handlePurchase}
-          disabled={isPurchasing}
+          disabled={isPurchasing || isLoadingProducts || !selectedProduct}
           activeOpacity={0.85}
         >
           <View style={styles.ctaGradient}>
             {isPurchasing ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.ctaText}>Continuer avec KiloTrack Pro</Text>
+              <Text style={styles.ctaText}>
+                {isLoadingProducts ? 'Chargement...' : 'Continuer avec KiloTrack Pro'}
+              </Text>
             )}
           </View>
         </TouchableOpacity>
 
-        {/* Footer */}
         <View style={styles.footer}>
           <View style={styles.footerLinksRow}>
             <TouchableOpacity onPress={handleRestore} disabled={isRestoring}>
@@ -260,11 +341,15 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                 {isRestoring ? 'Restauration...' : 'Restaurer les achats'}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => openLegalUrl(LEGAL_URLS.termsOfUse, "les Conditions d'utilisation")}
+            >
               <Text style={styles.footerLink}>Conditions d'utilisation</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity>
+          <TouchableOpacity
+            onPress={() => openLegalUrl(LEGAL_URLS.privacyPolicy, 'la Politique de confidentialité')}
+          >
             <Text style={styles.footerLink}>Politique de confidentialité</Text>
           </TouchableOpacity>
         </View>
@@ -299,7 +384,6 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     paddingBottom: 40,
   },
-  // Hero
   heroSection: {
     alignItems: 'center',
     marginBottom: 32,
@@ -337,7 +421,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     lineHeight: 22,
   },
-  // Features
   featuresSection: {
     gap: 12,
     marginBottom: 32,
@@ -361,7 +444,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '500',
   },
-  // Plans
   plansSection: {
     gap: 12,
     marginBottom: 32,
@@ -381,6 +463,9 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   planCardSelected: {},
+  planCardDisabled: {
+    opacity: 0.45,
+  },
   planBadge: {
     position: 'absolute',
     top: -12,
@@ -452,7 +537,17 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
-  // CTA
+  planUnavailableText: {
+    marginTop: 6,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#B42318',
+  },
+  storeStatusText: {
+    marginBottom: 12,
+    textAlign: 'center',
+    fontSize: 13,
+  },
   ctaButton: {
     borderRadius: 12,
     overflow: 'hidden',
@@ -462,6 +557,9 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 8,
     marginBottom: 32,
+  },
+  ctaButtonDisabled: {
+    opacity: 0.55,
   },
   ctaGradient: {
     paddingVertical: 18,
@@ -475,7 +573,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
-  // Footer
   footer: {
     alignItems: 'center',
     gap: 8,

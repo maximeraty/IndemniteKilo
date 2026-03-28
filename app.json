@@ -12,8 +12,9 @@
       "backgroundColor": "#ffffff"
     },
     "ios": {
-      "supportsTablet": true,
-      "bundleIdentifier": "com.maximeraty.kilotrack"
+      "supportsTablet": false,
+      "bundleIdentifier": "com.maximeraty.indemnitekilo",
+      "appleTeamId": "3TB4K6758N"
     },
     "android": {
       "adaptiveIcon": {
@@ -31,7 +32,8 @@
     },
     "plugins": [
       "expo-sqlite",
-      "expo-sharing"
+      "expo-sharing",
+      "expo-iap"
     ]
   }
 }
