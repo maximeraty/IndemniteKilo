@@ -30,7 +30,8 @@ const PLANS: {
   title: string;
   subtitle: string;
   fallbackPrice: string;
-  priceLabel: string;
+  billingLabel: string;
+  billedTodayLabel: string;
   productId: string;
   featured: boolean;
   badge?: string;
@@ -39,8 +40,9 @@ const PLANS: {
     key: 'monthly',
     title: 'Mensuel',
     subtitle: 'Sans engagement',
-    fallbackPrice: '--',
-    priceLabel: '/ MOIS',
+    fallbackPrice: '4,99 €',
+    billingLabel: 'par mois',
+    billedTodayLabel: 'Facturé chaque mois',
     productId: PRODUCT_IDS.MONTHLY,
     featured: false,
   },
@@ -48,18 +50,20 @@ const PLANS: {
     key: 'yearly',
     title: 'Annuel',
     subtitle: 'Économisez 40%',
-    fallbackPrice: '--',
-    priceLabel: 'SOIT 2,91 € / MOIS',
+    fallbackPrice: '34,99 €',
+    billingLabel: 'par an',
+    billedTodayLabel: 'Facturé chaque année',
     productId: PRODUCT_IDS.YEARLY,
     featured: true,
     badge: 'Meilleure Offre',
   },
   {
     key: 'lifetime',
-    title: 'À vie (Lifetime)',
+    title: 'À vie',
     subtitle: 'Paiement unique',
-    fallbackPrice: '--',
-    priceLabel: 'ONE-TIME',
+    fallbackPrice: '99,99 €',
+    billingLabel: 'à vie',
+    billedTodayLabel: 'Paiement unique',
     productId: PRODUCT_IDS.LIFETIME,
     featured: false,
   },
@@ -113,6 +117,8 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
 
   const selectedProductId = PLANS.find((plan) => plan.key === selectedPlan)?.productId;
   const selectedProduct = selectedProductId ? productsById[selectedProductId] : undefined;
+  const selectedPlanConfig = PLANS.find((plan) => plan.key === selectedPlan);
+  const selectedPrice = selectedProduct?.displayPrice || selectedPlanConfig?.fallbackPrice || '--';
 
   const handlePurchase = useCallback(async () => {
     const plan = PLANS.find((p) => p.key === selectedPlan);
@@ -203,7 +209,7 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
           </View>
 
           <Text style={[styles.heroTitle, { color: colors.text }]}>
-            Débloquez tout{'\n'}KiloTrack
+            Débloquez tout avec Kilotrack Pro
           </Text>
           <Text style={[styles.heroSubtitle, { color: colors.textSecondary }]}>
             Enregistrez plus de 10 trajets et exportez vos rapports sans limites.
@@ -263,7 +269,7 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                       </View>
                       <View style={styles.planPriceRight}>
                         <Text style={styles.planPriceWhite}>{price}</Text>
-                        <Text style={styles.planPriceLabelFeatured}>{plan.priceLabel}</Text>
+                        <Text style={styles.planPriceLabelFeatured}>{plan.billingLabel}</Text>
                       </View>
                     </View>
                   </View>
@@ -299,7 +305,7 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                   <View style={styles.planPriceRight}>
                     <Text style={[styles.planPrice, { color: colors.text }]}>{price}</Text>
                     <Text style={[styles.planPriceLabel, { color: colors.textSecondary }]}>
-                      {plan.priceLabel}
+                      {plan.billingLabel}
                     </Text>
                   </View>
                 </View>
@@ -312,6 +318,18 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
           <Text style={[styles.storeStatusText, { color: colors.textSecondary }]}>
             Chargement des offres App Store...
           </Text>
+        ) : null}
+
+        {selectedPlanConfig ? (
+          <View style={[styles.billingSummaryCard, { backgroundColor: colors.surfaceSecondary }]}>
+            <Text style={[styles.billingSummaryLabel, { color: colors.textSecondary }]}>
+              Montant facturé
+            </Text>
+            <Text style={[styles.billingSummaryPrice, { color: colors.text }]}>{selectedPrice}</Text>
+            <Text style={[styles.billingSummaryCaption, { color: colors.textSecondary }]}>
+              {selectedPlanConfig.billedTodayLabel}
+            </Text>
+          </View>
         ) : null}
 
         <TouchableOpacity
@@ -327,9 +345,14 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
             {isPurchasing ? (
               <ActivityIndicator color="#FFFFFF" />
             ) : (
-              <Text style={styles.ctaText}>
-                {isLoadingProducts ? 'Chargement...' : 'Continuer avec KiloTrack Pro'}
-              </Text>
+              <>
+                <Text style={styles.ctaText}>{isLoadingProducts ? 'Chargement...' : 'Continuer'}</Text>
+                {!isLoadingProducts && selectedPlanConfig ? (
+                  <Text style={styles.ctaSubtext}>
+                    {selectedPrice} {selectedPlanConfig.billingLabel}
+                  </Text>
+                ) : null}
+              </>
             )}
           </View>
         </TouchableOpacity>
@@ -527,15 +550,13 @@ const styles = StyleSheet.create({
   planPriceLabel: {
     fontSize: 10,
     fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 0.2,
   },
   planPriceLabelFeatured: {
     fontSize: 10,
     fontWeight: '700',
     color: '#D8E2FF',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
+    letterSpacing: 0.2,
   },
   planUnavailableText: {
     marginTop: 6,
@@ -547,6 +568,30 @@ const styles = StyleSheet.create({
     marginBottom: 12,
     textAlign: 'center',
     fontSize: 13,
+  },
+  billingSummaryCard: {
+    borderRadius: 16,
+    paddingVertical: 18,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  billingSummaryLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginBottom: 6,
+  },
+  billingSummaryPrice: {
+    fontSize: 32,
+    fontWeight: '800',
+    lineHeight: 36,
+    marginBottom: 4,
+  },
+  billingSummaryCaption: {
+    fontSize: 14,
+    fontWeight: '500',
   },
   ctaButton: {
     borderRadius: 12,
@@ -572,6 +617,12 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: '700',
     color: '#FFFFFF',
+  },
+  ctaSubtext: {
+    marginTop: 4,
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#D8E2FF',
   },
   footer: {
     alignItems: 'center',
