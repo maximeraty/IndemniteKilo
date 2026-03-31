@@ -6,16 +6,13 @@ import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StatusBar } from 'expo-status-bar';
 import { ThemeProvider, useTheme } from './src/theme/ThemeContext';
 import { TabNavigator } from './src/navigation/TabNavigator';
-import { LoginScreen } from './src/screens/LoginScreen';
 import { useDatabase } from './src/hooks/useDatabase';
 import { useVehiculeStore } from './src/stores/useVehiculeStore';
-import { useAuthStore } from './src/stores/useAuthStore';
 import { useSubscriptionStore } from './src/stores/useSubscriptionStore';
 
 function AppContent() {
   const { isReady, error } = useDatabase();
   const { colors } = useTheme();
-  const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const loadVehicules = useVehiculeStore((s) => s.loadVehicules);
   const initializeSubscription = useSubscriptionStore((s) => s.initialize);
   const refreshSubscriptionStatus = useSubscriptionStore((s) => s.refreshStatus);
@@ -28,7 +25,7 @@ function AppContent() {
   }, [isReady, loadVehicules, initializeSubscription]);
 
   useEffect(() => {
-    if (!isReady || !isAuthenticated) {
+    if (!isReady) {
       return;
     }
 
@@ -41,11 +38,7 @@ function AppContent() {
     return () => {
       subscription.remove();
     };
-  }, [isAuthenticated, isReady, refreshSubscriptionStatus]);
-
-  if (!isAuthenticated) {
-    return <LoginScreen />;
-  }
+  }, [isReady, refreshSubscriptionStatus]);
 
   if (error) {
     return (

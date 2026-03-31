@@ -12,7 +12,6 @@ import { useFocusEffect } from '@react-navigation/native';
 import { useTheme } from '../theme/ThemeContext';
 import { useSettingsStore } from '../stores/useSettingsStore';
 import { useVehiculeStore } from '../stores/useVehiculeStore';
-import { useAuthStore } from '../stores/useAuthStore';
 import { useSubscriptionStore, FREE_TRIP_LIMIT } from '../stores/useSubscriptionStore';
 import { getVehiculeDescription } from '../services/indemniteService';
 import type { ParametresScreenProps } from '../types/navigation';
@@ -21,7 +20,6 @@ export function ParametresScreen({ navigation }: ParametresScreenProps) {
   const { colors } = useTheme();
   const { userName, companyName, updateProfile } = useSettingsStore();
   const { vehicules } = useVehiculeStore();
-  const logout = useAuthStore((s) => s.logout);
   const { isPro, totalTripCount, refreshStatus, loadTripCount } = useSubscriptionStore();
   const defaultVehicule = vehicules[0];
 
@@ -36,22 +34,13 @@ export function ParametresScreen({ navigation }: ParametresScreenProps) {
     Alert.prompt(
       `Modifier le ${label.toLowerCase()}`,
       undefined,
-      (value) => {
-        if (value !== null) updateProfile({ [key]: value.trim() });
+      (value?: string) => {
+        if (value !== undefined && value !== null) {
+          updateProfile({ [key]: value.trim() });
+        }
       },
       'plain-text',
       currentValue
-    );
-  };
-
-  const handleLogout = () => {
-    Alert.alert(
-      'Déconnexion',
-      'Êtes-vous sûr de vouloir vous déconnecter ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        { text: 'Déconnexion', style: 'destructive', onPress: logout },
-      ]
     );
   };
 
@@ -239,14 +228,6 @@ export function ParametresScreen({ navigation }: ParametresScreenProps) {
         </View>
       </View>
 
-      {/* Déconnexion */}
-      <TouchableOpacity
-        style={[styles.logoutButton, { backgroundColor: colors.separator }]}
-        onPress={handleLogout}
-        activeOpacity={0.7}
-      >
-        <Text style={styles.logoutText}>Déconnexion</Text>
-      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -383,17 +364,5 @@ const styles = StyleSheet.create({
   aboutText: {
     fontSize: 12,
     lineHeight: 19.5,
-  },
-  logoutButton: {
-    marginHorizontal: 16,
-    marginTop: 32,
-    paddingVertical: 16,
-    borderRadius: 12,
-    alignItems: 'center',
-  },
-  logoutText: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#BA1A1A',
   },
 });
