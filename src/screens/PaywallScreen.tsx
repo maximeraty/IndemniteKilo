@@ -358,11 +358,16 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
         </TouchableOpacity>
 
         <View style={styles.footer}>
+          <TouchableOpacity onPress={handleRestore} disabled={isRestoring}>
+            <Text style={styles.footerLink}>
+              {isRestoring ? 'Restauration...' : 'Restaurer les achats'}
+            </Text>
+          </TouchableOpacity>
           <View style={styles.footerLinksRow}>
-            <TouchableOpacity onPress={handleRestore} disabled={isRestoring}>
-              <Text style={styles.footerLink}>
-                {isRestoring ? 'Restauration...' : 'Restaurer les achats'}
-              </Text>
+            <TouchableOpacity
+              onPress={() => openLegalUrl(LEGAL_URLS.privacyPolicy, 'la Politique de confidentialité')}
+            >
+              <Text style={styles.footerLink}>Politique de confidentialité</Text>
             </TouchableOpacity>
             <TouchableOpacity
               onPress={() => openLegalUrl(LEGAL_URLS.termsOfUse, "les Conditions d'utilisation")}
@@ -370,11 +375,6 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
               <Text style={styles.footerLink}>Conditions d'utilisation</Text>
             </TouchableOpacity>
           </View>
-          <TouchableOpacity
-            onPress={() => openLegalUrl(LEGAL_URLS.privacyPolicy, 'la Politique de confidentialité')}
-          >
-            <Text style={styles.footerLink}>Politique de confidentialité</Text>
-          </TouchableOpacity>
         </View>
       </ScrollView>
     </View>
