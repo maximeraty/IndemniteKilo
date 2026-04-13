@@ -11,17 +11,16 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { ErrorCode } from 'expo-iap';
+import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { LEGAL_URLS } from '../constants/legal';
-import { useTheme } from '../theme/ThemeContext';
 import { useSubscriptionStore, type SubscriptionPlan } from '../stores/useSubscriptionStore';
 import {
-  getProducts,
-  purchaseSubscription,
-  purchaseProduct,
   PRODUCT_IDS,
-  type StoreProductInfo,
+  purchaseProduct,
+  purchaseSubscription,
+  type IapCatalogState,
 } from '../services/iapService';
-import type { NativeStackScreenProps } from '@react-navigation/native-stack';
+import { useTheme } from '../theme/ThemeContext';
 
 type PaywallScreenProps = NativeStackScreenProps<any, 'Paywall'>;
 
@@ -74,55 +73,90 @@ const FEATURES = [
   'Exports PDF & Excel illimités',
 ];
 
+function getCatalogStatusTitle(catalog: IapCatalogState) {
+  switch (catalog.catalogStatus) {
+    case 'unsupported':
+      return 'Achats indisponibles sur ce build';
+    case 'error':
+      return 'Connexion App Store impossible';
+    case 'empty':
+      return 'Offres App Store indisponibles';
+    default:
+      return '';
+  }
+}
+
+function getCatalogStatusMessage(catalog: IapCatalogState) {
+  if (catalog.lastErrorMessage) {
+    return catalog.lastErrorMessage;
+  }
+
+  switch (catalog.catalogStatus) {
+    case 'unsupported':
+      return 'Les achats intégrés ne sont pas disponibles sur cet environnement.';
+    case 'error':
+      return "Les offres App Store n'ont pas pu être chargées pour le moment.";
+    case 'empty':
+      return "Aucune offre n'a été retournée par l'App Store.";
+    default:
+      return '';
+  }
+}
+
 export function PaywallScreen({ navigation }: PaywallScreenProps) {
   const { colors } = useTheme();
+  const restore = useSubscriptionStore((state) => state.restore);
+  const iapCatalog = useSubscriptionStore((state) => state.iapCatalog);
+  const refreshIapCatalog = useSubscriptionStore((state) => state.refreshIapCatalog);
   const [selectedPlan, setSelectedPlan] = useState<SubscriptionPlan>('yearly');
   const [isPurchasing, setIsPurchasing] = useState(false);
   const [isRestoring, setIsRestoring] = useState(false);
-  const [isLoadingProducts, setIsLoadingProducts] = useState(true);
-  const [productsById, setProductsById] = useState<Record<string, StoreProductInfo>>({});
-  const { restore } = useSubscriptionStore();
 
   useEffect(() => {
-    let isMounted = true;
+    void refreshIapCatalog();
+  }, [refreshIapCatalog]);
 
-    const loadProducts = async () => {
-      try {
-        const products = await getProducts();
-        if (!isMounted) return;
+  useEffect(() => {
+    if (iapCatalog.isLoading) {
+      return;
+    }
 
-        const nextProducts = products.reduce<Record<string, StoreProductInfo>>((acc, product) => {
-          acc[product.id] = product;
-          return acc;
-        }, {});
+    const currentPlan = PLANS.find((plan) => plan.key === selectedPlan);
+    if (currentPlan && iapCatalog.productsById[currentPlan.productId]) {
+      return;
+    }
 
-        setProductsById(nextProducts);
-      } catch {
-        if (isMounted) {
-          setProductsById({});
-        }
-      } finally {
-        if (isMounted) {
-          setIsLoadingProducts(false);
-        }
-      }
-    };
+    const firstAvailablePlan = PLANS.find((plan) => iapCatalog.productsById[plan.productId]);
+    if (firstAvailablePlan && firstAvailablePlan.key !== selectedPlan) {
+      setSelectedPlan(firstAvailablePlan.key);
+    }
+  }, [iapCatalog.isLoading, iapCatalog.productsById, selectedPlan]);
 
-    loadProducts();
-
-    return () => {
-      isMounted = false;
-    };
-  }, []);
-
-  const selectedProductId = PLANS.find((plan) => plan.key === selectedPlan)?.productId;
-  const selectedProduct = selectedProductId ? productsById[selectedProductId] : undefined;
+  const isLoadingProducts = iapCatalog.isLoading;
   const selectedPlanConfig = PLANS.find((plan) => plan.key === selectedPlan);
+  const selectedProductId = selectedPlanConfig?.productId;
+  const selectedProduct = selectedProductId ? iapCatalog.productsById[selectedProductId] : undefined;
   const selectedPrice = selectedProduct?.displayPrice || selectedPlanConfig?.fallbackPrice || '--';
+  const hasCatalogIssue = ['empty', 'error', 'unsupported'].includes(iapCatalog.catalogStatus);
+  const hasAnyStoreProduct = iapCatalog.returnedProductIds.length > 0;
+  const canPurchaseSelectedPlan = Boolean(selectedProduct) && !isLoadingProducts;
+  const diagnosticTitle = getCatalogStatusTitle(iapCatalog);
+  const diagnosticMessage = getCatalogStatusMessage(iapCatalog);
+
+  const handleReloadCatalog = useCallback(async () => {
+    await refreshIapCatalog(true);
+  }, [refreshIapCatalog]);
 
   const handlePurchase = useCallback(async () => {
     const plan = PLANS.find((p) => p.key === selectedPlan);
-    if (!plan) return;
+    if (!plan) {
+      return;
+    }
+
+    if (!selectedProduct) {
+      Alert.alert('Offres indisponibles', diagnosticMessage);
+      return;
+    }
 
     setIsPurchasing(true);
     try {
@@ -142,7 +176,7 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
     } finally {
       setIsPurchasing(false);
     }
-  }, [selectedPlan, navigation]);
+  }, [diagnosticMessage, navigation, selectedPlan, selectedProduct]);
 
   const handleRestore = useCallback(async () => {
     setIsRestoring(true);
@@ -160,7 +194,7 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
     } finally {
       setIsRestoring(false);
     }
-  }, [restore, navigation]);
+  }, [navigation, restore]);
 
   const openLegalUrl = useCallback(async (url: string, label: string) => {
     if (!url) {
@@ -190,7 +224,7 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
           onPress={() => navigation.goBack()}
           hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
-          <Ionicons name="close" size={24} color="#007AFF" />
+          <Ionicons name="close" size={24} color={colors.primary} />
         </TouchableOpacity>
         <Text style={[styles.headerTitle, { color: colors.text }]}>KiloTrack Pro</Text>
         <View style={styles.headerSpacer} />
@@ -233,7 +267,7 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
         <View style={styles.plansSection}>
           {PLANS.map((plan) => {
             const isSelected = selectedPlan === plan.key;
-            const storeProduct = productsById[plan.productId];
+            const storeProduct = iapCatalog.productsById[plan.productId];
             const price = storeProduct?.displayPrice || plan.fallbackPrice;
             const isAvailable = Boolean(storeProduct);
             const isDisabled = !isAvailable && !isLoadingProducts;
@@ -254,11 +288,11 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
                       isDisabled && styles.planCardDisabled,
                     ]}
                   >
-                    {plan.badge && (
+                    {plan.badge ? (
                       <View style={styles.planBadge}>
                         <Text style={styles.planBadgeText}>{plan.badge}</Text>
                       </View>
-                    )}
+                    ) : null}
                     <View style={styles.planContent}>
                       <View>
                         <Text style={styles.planTitleWhite}>{plan.title}</Text>
@@ -320,6 +354,40 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
           </Text>
         ) : null}
 
+        {hasCatalogIssue ? (
+          <View
+            style={[
+              styles.statusCard,
+              {
+                backgroundColor: colors.surfaceSecondary,
+                borderColor: colors.border,
+              },
+            ]}
+          >
+            <View style={styles.statusHeader}>
+              <Ionicons name="alert-circle-outline" size={18} color={colors.error} />
+              <Text style={[styles.statusTitle, { color: colors.text }]}>{diagnosticTitle}</Text>
+            </View>
+            <Text style={[styles.statusMessage, { color: colors.textSecondary }]}>
+              {diagnosticMessage}
+            </Text>
+            <Text style={[styles.statusMeta, { color: colors.textSecondary }]}>
+              Produits attendus: {iapCatalog.requestedProductIds.join(', ')}
+            </Text>
+            <Text style={[styles.statusMeta, { color: colors.textSecondary }]}>
+              Produits reçus: {hasAnyStoreProduct ? iapCatalog.returnedProductIds.join(', ') : 'aucun'}
+            </Text>
+            <TouchableOpacity
+              style={[styles.retryButton, { borderColor: colors.primary }]}
+              onPress={handleReloadCatalog}
+              disabled={isLoadingProducts}
+              activeOpacity={0.85}
+            >
+              <Text style={[styles.retryButtonText, { color: colors.primary }]}>Réessayer</Text>
+            </TouchableOpacity>
+          </View>
+        ) : null}
+
         {selectedPlanConfig ? (
           <View style={[styles.billingSummaryCard, { backgroundColor: colors.surfaceSecondary }]}>
             <Text style={[styles.billingSummaryLabel, { color: colors.textSecondary }]}>
@@ -335,10 +403,10 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
         <TouchableOpacity
           style={[
             styles.ctaButton,
-            (!selectedProduct || isLoadingProducts) && styles.ctaButtonDisabled,
+            (!canPurchaseSelectedPlan || hasCatalogIssue) && styles.ctaButtonDisabled,
           ]}
           onPress={handlePurchase}
-          disabled={isPurchasing || isLoadingProducts || !selectedProduct}
+          disabled={isPurchasing || !canPurchaseSelectedPlan || hasCatalogIssue}
           activeOpacity={0.85}
         >
           <View style={styles.ctaGradient}>
@@ -346,7 +414,13 @@ export function PaywallScreen({ navigation }: PaywallScreenProps) {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <>
-                <Text style={styles.ctaText}>{isLoadingProducts ? 'Chargement...' : 'Continuer'}</Text>
+                <Text style={styles.ctaText}>
+                  {isLoadingProducts
+                    ? 'Chargement...'
+                    : hasCatalogIssue
+                      ? 'Offres indisponibles'
+                      : 'Continuer'}
+                </Text>
                 {!isLoadingProducts && selectedPlanConfig ? (
                   <Text style={styles.ctaSubtext}>
                     {selectedPrice} {selectedPlanConfig.billingLabel}
@@ -469,7 +543,7 @@ const styles = StyleSheet.create({
   },
   plansSection: {
     gap: 12,
-    marginBottom: 32,
+    marginBottom: 24,
   },
   planCard: {
     padding: 20,
@@ -518,126 +592,151 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   planTitle: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
+    marginBottom: 4,
   },
   planTitleWhite: {
-    fontSize: 18,
+    fontSize: 20,
     fontWeight: '700',
     color: '#FFFFFF',
+    marginBottom: 4,
   },
   planSubtitle: {
     fontSize: 14,
-    marginTop: 2,
+    fontWeight: '500',
   },
   planSubtitleFeatured: {
     fontSize: 14,
-    color: '#D8E2FF',
-    marginTop: 2,
-  },
-  planPriceRight: {
-    alignItems: 'flex-end',
-  },
-  planPrice: {
-    fontSize: 20,
-    fontWeight: '800',
-  },
-  planPriceWhite: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: '#FFFFFF',
-  },
-  planPriceLabel: {
-    fontSize: 10,
-    fontWeight: '700',
-    letterSpacing: 0.2,
-  },
-  planPriceLabelFeatured: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#D8E2FF',
-    letterSpacing: 0.2,
+    fontWeight: '500',
+    color: 'rgba(255,255,255,0.84)',
   },
   planUnavailableText: {
     marginTop: 6,
     fontSize: 12,
-    fontWeight: '600',
-    color: '#B42318',
+    fontWeight: '700',
+    color: '#BA1A1A',
+  },
+  planPriceRight: {
+    alignItems: 'flex-end',
+    marginLeft: 16,
+  },
+  planPrice: {
+    fontSize: 22,
+    fontWeight: '800',
+  },
+  planPriceWhite: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  planPriceLabel: {
+    fontSize: 13,
+    marginTop: 4,
+  },
+  planPriceLabelFeatured: {
+    fontSize: 13,
+    marginTop: 4,
+    color: 'rgba(255,255,255,0.8)',
   },
   storeStatusText: {
-    marginBottom: 12,
+    fontSize: 14,
     textAlign: 'center',
-    fontSize: 13,
+    marginBottom: 20,
+  },
+  statusCard: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 20,
+    gap: 10,
+  },
+  statusHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  statusTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  statusMessage: {
+    fontSize: 14,
+    lineHeight: 20,
+  },
+  statusMeta: {
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  retryButton: {
+    marginTop: 6,
+    alignSelf: 'flex-start',
+    borderWidth: 1,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  retryButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
   },
   billingSummaryCard: {
     borderRadius: 16,
-    paddingVertical: 18,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    marginBottom: 16,
+    padding: 20,
+    marginBottom: 24,
   },
   billingSummaryLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
+    fontSize: 14,
     marginBottom: 6,
   },
   billingSummaryPrice: {
-    fontSize: 32,
+    fontSize: 30,
     fontWeight: '800',
-    lineHeight: 36,
     marginBottom: 4,
   },
   billingSummaryCaption: {
     fontSize: 14,
-    fontWeight: '500',
   },
   ctaButton: {
-    borderRadius: 12,
+    borderRadius: 18,
     overflow: 'hidden',
-    shadowColor: '#0058BC',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.15,
-    shadowRadius: 20,
-    elevation: 8,
-    marginBottom: 32,
+    marginBottom: 28,
   },
   ctaButtonDisabled: {
-    opacity: 0.55,
+    opacity: 0.5,
   },
   ctaGradient: {
-    paddingVertical: 18,
+    minHeight: 64,
+    backgroundColor: '#0058BC',
     alignItems: 'center',
     justifyContent: 'center',
-    borderRadius: 12,
-    backgroundColor: '#0058BC',
+    paddingHorizontal: 20,
+    paddingVertical: 14,
   },
   ctaText: {
-    fontSize: 18,
-    fontWeight: '700',
     color: '#FFFFFF',
+    fontSize: 18,
+    fontWeight: '800',
   },
   ctaSubtext: {
+    color: 'rgba(255,255,255,0.86)',
+    fontSize: 13,
     marginTop: 4,
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#D8E2FF',
   },
   footer: {
     alignItems: 'center',
-    gap: 8,
+    gap: 18,
   },
   footerLinksRow: {
     flexDirection: 'row',
-    gap: 24,
-    marginBottom: 4,
+    gap: 20,
+    flexWrap: 'wrap',
+    justifyContent: 'center',
   },
   footerLink: {
-    fontSize: 11,
-    fontWeight: '500',
-    color: '#94A3B8',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
+    color: '#0058BC',
+    fontSize: 14,
+    fontWeight: '600',
+    textAlign: 'center',
   },
 });

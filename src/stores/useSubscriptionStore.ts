@@ -2,11 +2,14 @@ import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+  getIapCatalogState,
   getProStatus,
   initializeIAP,
+  loadProductsCatalog,
   setupPurchaseListeners,
   restorePurchases,
   isProPurchase,
+  type IapCatalogState,
 } from '../services/iapService';
 import * as db from '../services/db';
 
@@ -18,10 +21,12 @@ interface SubscriptionState {
   isPro: boolean;
   productId: string | null;
   totalTripCount: number;
+  iapCatalog: IapCatalogState;
 
   // Actions
   initialize: () => Promise<void>;
   refreshStatus: () => Promise<boolean>;
+  refreshIapCatalog: (forceRefresh?: boolean) => Promise<IapCatalogState>;
   loadTripCount: () => Promise<void>;
   setPro: (productId: string) => void;
   restore: () => Promise<boolean>;
@@ -35,12 +40,15 @@ export const useSubscriptionStore = create<SubscriptionState>()(
       isPro: false,
       productId: null,
       totalTripCount: 0,
+      iapCatalog: getIapCatalogState(),
 
       initialize: async () => {
         await get().loadTripCount();
         try {
           await initializeIAP();
+          const iapCatalog = getIapCatalogState();
           await get().refreshStatus();
+          set({ iapCatalog });
 
           setupPurchaseListeners(
             (purchase) => {
@@ -54,6 +62,7 @@ export const useSubscriptionStore = create<SubscriptionState>()(
           );
         } catch (error) {
           console.warn('IAP initialization failed:', error);
+          set({ iapCatalog: getIapCatalogState() });
         }
       },
 
@@ -74,6 +83,12 @@ export const useSubscriptionStore = create<SubscriptionState>()(
           console.warn('Subscription status refresh failed:', error);
           return get().isPro;
         }
+      },
+
+      refreshIapCatalog: async (forceRefresh = false) => {
+        const iapCatalog = await loadProductsCatalog({ forceRefresh });
+        set({ iapCatalog });
+        return iapCatalog;
       },
 
       loadTripCount: async () => {

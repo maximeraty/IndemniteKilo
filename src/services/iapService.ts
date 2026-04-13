@@ -24,6 +24,7 @@ export const PRODUCT_IDS = {
 
 const SUBSCRIPTION_IDS = [PRODUCT_IDS.MONTHLY, PRODUCT_IDS.YEARLY];
 const NON_CONSUMABLE_IDS = [PRODUCT_IDS.LIFETIME];
+const REQUESTED_PRODUCT_IDS = [...SUBSCRIPTION_IDS, ...NON_CONSUMABLE_IDS];
 
 export interface StoreProductInfo {
   id: string;
@@ -38,21 +39,90 @@ export interface PurchaseInfo {
   purchaseState: string;
 }
 
+export type IapCatalogStatus = 'ready' | 'empty' | 'error' | 'unsupported';
+
+export interface IapCatalogState {
+  productsById: Record<string, StoreProductInfo>;
+  isLoading: boolean;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  requestedProductIds: string[];
+  returnedProductIds: string[];
+  connectionInitialized: boolean;
+  catalogStatus: IapCatalogStatus;
+}
+
 type PurchaseSuccessCallback = (purchase: PurchaseInfo) => void;
 type PurchaseErrorCallback = (error: { code: string; message: string }) => void;
 
 let connectionReady = false;
 let listenersReady = false;
-let catalogPromise: Promise<StoreProductInfo[]> | null = null;
+let catalogPromise: Promise<IapCatalogState> | null = null;
 let catalogCache = new Map<string, StoreProductInfo>();
 let purchaseUpdateSubscription: { remove: () => void } | null = null;
 let purchaseErrorSubscription: { remove: () => void } | null = null;
 const successCallbacks = new Set<PurchaseSuccessCallback>();
 const errorCallbacks = new Set<PurchaseErrorCallback>();
 const processedPurchases = new Set<string>();
+let catalogState: IapCatalogState = createInitialCatalogState();
 
 function isNativeIapPlatform() {
   return Platform.OS === 'ios' || Platform.OS === 'android';
+}
+
+function createInitialCatalogState(): IapCatalogState {
+  const isNativePlatform = isNativeIapPlatform();
+
+  return {
+    productsById: {},
+    isLoading: isNativePlatform,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    requestedProductIds: REQUESTED_PRODUCT_IDS,
+    returnedProductIds: [],
+    connectionInitialized: connectionReady,
+    catalogStatus: isNativePlatform ? 'empty' : 'unsupported',
+  };
+}
+
+function updateCatalogState(
+  partial: Partial<IapCatalogState>,
+): IapCatalogState {
+  catalogState = {
+    ...catalogState,
+    ...partial,
+    connectionInitialized: partial.connectionInitialized ?? connectionReady,
+    requestedProductIds: partial.requestedProductIds ?? REQUESTED_PRODUCT_IDS,
+  };
+
+  return catalogState;
+}
+
+function productsToRecord(
+  products: StoreProductInfo[],
+): Record<string, StoreProductInfo> {
+  return products.reduce<Record<string, StoreProductInfo>>((acc, product) => {
+    acc[product.id] = product;
+    return acc;
+  }, {});
+}
+
+function logInfo(message: string, details?: Record<string, unknown>) {
+  if (details) {
+    console.info(`[IAP] ${message}`, details);
+    return;
+  }
+
+  console.info(`[IAP] ${message}`);
+}
+
+function logWarn(message: string, details?: Record<string, unknown>) {
+  if (details) {
+    console.warn(`[IAP] ${message}`, details);
+    return;
+  }
+
+  console.warn(`[IAP] ${message}`);
 }
 
 function normalizePurchase(purchase: Purchase): PurchaseInfo {
@@ -82,6 +152,10 @@ function normalizeError(error: unknown): { code: string; message: string } {
   };
 }
 
+function isMissingExpoIapNativeModule(error: { code: string; message: string }) {
+  return error.code === ErrorCode.Unknown && error.message.includes("Cannot find native module 'ExpoIap'");
+}
+
 function emitPurchaseError(error: { code: string; message: string }) {
   for (const callback of errorCallbacks) {
     callback(error);
@@ -90,34 +164,174 @@ function emitPurchaseError(error: { code: string; message: string }) {
 
 async function ensureConnection() {
   if (!isNativeIapPlatform() || connectionReady) {
+    updateCatalogState({
+      connectionInitialized: connectionReady,
+      catalogStatus: isNativeIapPlatform() ? catalogState.catalogStatus : 'unsupported',
+    });
     return;
   }
 
-  await initConnection();
-  connectionReady = true;
+  try {
+    await initConnection();
+    connectionReady = true;
+    updateCatalogState({
+      connectionInitialized: true,
+    });
+    logInfo('Connection initialized', {
+      platform: Platform.OS,
+      requestedProductIds: REQUESTED_PRODUCT_IDS,
+    });
+  } catch (error) {
+    const normalizedError = normalizeError(error);
+    updateCatalogState({
+      connectionInitialized: false,
+      catalogStatus: 'error',
+      lastErrorCode: normalizedError.code,
+      lastErrorMessage: getDiagnosticMessage(normalizedError),
+    });
+    logWarn('Connection initialization failed', {
+      code: normalizedError.code,
+      message: normalizedError.message,
+      platform: Platform.OS,
+    });
+    throw error;
+  }
 }
 
-async function loadCatalog(): Promise<StoreProductInfo[]> {
-  if (!isNativeIapPlatform()) {
-    return [];
+function getCatalogEmptyMessage() {
+  return "Aucune offre App Store n'a été renvoyée pour les identifiants configurés. Vérifiez le Paid Apps Agreement, la capacité In-App Purchase, le bundle ID com.maximeraty.indemnitekilo et la configuration des produits dans App Store Connect.";
+}
+
+function getDiagnosticMessage(error: { code: string; message: string }) {
+  if (isMissingExpoIapNativeModule(error)) {
+    return "Ce build iOS ne contient pas le module natif expo-iap. Réinstallez un build natif récent sur l'appareil. Les achats intégrés ne fonctionneront pas dans Expo Go ni dans un ancien dev build.";
   }
 
-  if (catalogPromise) {
+  switch (error.code) {
+    case ErrorCode.IapNotAvailable:
+      return 'Les achats intégrés ne sont pas disponibles sur cet appareil ou sur ce build.';
+    case ErrorCode.InitConnection:
+      return "La connexion à StoreKit a échoué. Vérifiez la capacité In-App Purchase et la signature du build.";
+    case ErrorCode.NetworkError:
+      return "La connexion au Store a échoué. Vérifiez l'accès réseau puis réessayez.";
+    case ErrorCode.ItemUnavailable:
+      return getCatalogEmptyMessage();
+    default:
+      return error.message || "Les offres App Store n'ont pas pu être chargées.";
+  }
+}
+
+async function loadCatalog({
+  forceRefresh = false,
+}: {
+  forceRefresh?: boolean;
+} = {}): Promise<IapCatalogState> {
+  if (!isNativeIapPlatform()) {
+    return updateCatalogState({
+      productsById: {},
+      isLoading: false,
+      lastErrorCode: ErrorCode.IapNotAvailable,
+      lastErrorMessage: 'Les achats intégrés ne sont pas disponibles sur cette plateforme.',
+      returnedProductIds: [],
+      catalogStatus: 'unsupported',
+    });
+  }
+
+  if (!forceRefresh && catalogPromise) {
     return catalogPromise;
   }
 
+  if (!forceRefresh && catalogCache.size > 0) {
+    return updateCatalogState({
+      productsById: productsToRecord(Array.from(catalogCache.values())),
+      isLoading: false,
+      lastErrorCode: null,
+      lastErrorMessage: null,
+      returnedProductIds: Array.from(catalogCache.keys()),
+      connectionInitialized: connectionReady,
+      catalogStatus: 'ready',
+    });
+  }
+
+  if (forceRefresh) {
+    catalogCache = new Map();
+  }
+
+  updateCatalogState({
+    isLoading: true,
+    lastErrorCode: null,
+    lastErrorMessage: null,
+    requestedProductIds: REQUESTED_PRODUCT_IDS,
+  });
+
   catalogPromise = (async () => {
-    await ensureConnection();
+    try {
+      await ensureConnection();
 
-    const [subscriptions, products] = await Promise.all([
-      fetchProducts({ skus: SUBSCRIPTION_IDS, type: 'subs' }) as Promise<ProductSubscription[]>,
-      fetchProducts({ skus: NON_CONSUMABLE_IDS, type: 'in-app' }) as Promise<Product[]>,
-    ]);
+      const [subscriptions, products] = await Promise.all([
+        fetchProducts({ skus: SUBSCRIPTION_IDS, type: 'subs' }) as Promise<ProductSubscription[]>,
+        fetchProducts({ skus: NON_CONSUMABLE_IDS, type: 'in-app' }) as Promise<Product[]>,
+      ]);
 
-    const nextCatalog = [...subscriptions, ...products].map(normalizeProduct);
-    catalogCache = new Map(nextCatalog.map((item) => [item.id, item]));
+      const nextCatalog = [...subscriptions, ...products].map(normalizeProduct);
+      catalogCache = new Map(nextCatalog.map((item) => [item.id, item]));
 
-    return nextCatalog;
+      if (nextCatalog.length === 0) {
+        const nextState = updateCatalogState({
+          productsById: {},
+          isLoading: false,
+          lastErrorCode: ErrorCode.ItemUnavailable,
+          lastErrorMessage: getCatalogEmptyMessage(),
+          returnedProductIds: [],
+          catalogStatus: 'empty',
+          connectionInitialized: connectionReady,
+        });
+
+        logWarn('Catalog returned no products', {
+          requestedProductIds: REQUESTED_PRODUCT_IDS,
+          returnedProductIds: [],
+          bundleIdentifier: 'com.maximeraty.indemnitekilo',
+        });
+
+        return nextState;
+      }
+
+      const nextState = updateCatalogState({
+        productsById: productsToRecord(nextCatalog),
+        isLoading: false,
+        lastErrorCode: null,
+        lastErrorMessage: null,
+        returnedProductIds: nextCatalog.map((product) => product.id),
+        catalogStatus: 'ready',
+        connectionInitialized: connectionReady,
+      });
+
+      logInfo('Catalog loaded', {
+        requestedProductIds: REQUESTED_PRODUCT_IDS,
+        returnedProductIds: nextState.returnedProductIds,
+      });
+
+      return nextState;
+    } catch (error) {
+      const normalizedError = normalizeError(error);
+      const nextState = updateCatalogState({
+        productsById: {},
+        isLoading: false,
+        lastErrorCode: normalizedError.code,
+        lastErrorMessage: getDiagnosticMessage(normalizedError),
+        returnedProductIds: [],
+        catalogStatus: 'error',
+        connectionInitialized: connectionReady,
+      });
+
+      logWarn('Catalog loading failed', {
+        code: normalizedError.code,
+        message: normalizedError.message,
+        requestedProductIds: REQUESTED_PRODUCT_IDS,
+      });
+
+      return nextState;
+    }
   })();
 
   try {
@@ -143,12 +357,14 @@ async function getActivePurchases(): Promise<PurchaseInfo[]> {
 }
 
 async function ensureProductAvailable(productId: string) {
-  const catalog = await loadCatalog();
-  if (!catalog.some((product) => product.id === productId)) {
+  const nextCatalogState = await loadCatalog({
+    forceRefresh: catalogState.catalogStatus !== 'ready',
+  });
+
+  if (!nextCatalogState.productsById[productId]) {
     throw {
       code: ErrorCode.ItemUnavailable,
-      message:
-        "Le produit n'est pas disponible. Vérifiez sa configuration dans App Store Connect ou Google Play Console.",
+      message: nextCatalogState.lastErrorMessage || getCatalogEmptyMessage(),
     };
   }
 }
@@ -158,7 +374,6 @@ export async function initializeIAP(): Promise<void> {
     return;
   }
 
-  await ensureConnection();
   await loadCatalog();
 }
 
@@ -213,12 +428,20 @@ export function setupPurchaseListeners(
 }
 
 export async function getProducts(): Promise<StoreProductInfo[]> {
-  const cachedProducts = Array.from(catalogCache.values());
-  if (cachedProducts.length > 0) {
-    return cachedProducts;
-  }
+  const nextCatalogState = await loadCatalog();
+  return Object.values(nextCatalogState.productsById);
+}
 
-  return loadCatalog();
+export async function loadProductsCatalog({
+  forceRefresh = false,
+}: {
+  forceRefresh?: boolean;
+} = {}): Promise<IapCatalogState> {
+  return loadCatalog({ forceRefresh });
+}
+
+export function getIapCatalogState(): IapCatalogState {
+  return catalogState;
 }
 
 export async function purchaseSubscription(sku: string): Promise<void> {
